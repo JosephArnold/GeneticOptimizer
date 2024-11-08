@@ -1,143 +1,108 @@
-// C++ program to create target string, starting from 
-// random string using Genetic Algorithm 
+// C++ program to create target string, starting from
+// random string using Genetic Algorithm
 
 #include <bits/stdc++.h>
 #include <bitset>
-#include <random> 
+#include <random>
+#include <execution>
 
-#define POPULATION_SIZE 50 
-#define INDIVIDUAL_SIZE 5
+#define POPULATION_SIZE 1000U
+#define INDIVIDUAL_SIZE 100U
+#define MAX_ITER 100
+//#include "Util."
+#include "Individual.cpp"
+#include "fitness_python.cpp"
 
-#include "Util.cpp"
-#include "Fitness.cpp"
 
+// Overloading < operator
 template <typename FitnessDataType>
-class Individual { 
+auto operator<(const Individual<FitnessDataType> &ind1,
+               const Individual<FitnessDataType> &ind2) -> bool {
+  return ind1.fitness < ind2.fitness;
+}
 
-    public: 
-    std::bitset<INDIVIDUAL_SIZE> chromosome; 
-    FitnessDataType fitness; 
-    
-    Individual(std::bitset<INDIVIDUAL_SIZE> chromosome):chromosome(chromosome) {
-        fitness = calculate_fitness<FitnessDataType>(chromosome);
-    };
- 
-    Individual mate(Individual parent2);  
-
-};  
-
-// Perform mating and produce new offspring using Uniform crossover
-// Genes are chosen from either parent randomly. 10% of the genes are random.
-template <typename FitnessDataType>
-Individual<FitnessDataType> Individual<FitnessDataType>::mate(Individual<FitnessDataType> par2) { 
-	// chromosome for offspring 
-    std::bitset<INDIVIDUAL_SIZE> child_chromosome; 
-
-    for(auto i = 0;i < INDIVIDUAL_SIZE;i++) { 
-		// random probability 
-        auto p = getRandom(0.0, 100.0) / 100.0; 
-
-	// if prob is less than 0.45, insert gene 
-	// from parent 1 
-	if(p < 0.45) 
-	    child_chromosome[i] = chromosome[i]; 
-
-	// if prob is between 0.45 and 0.90, insert 
-	// gene from parent 2 
-	else if(p < 0.90) 
-	    child_chromosome[i] = par2.chromosome[i]; 
-
-	// otherwise insert random gene(mutate), 
-	// for maintaining diversity 
-	else
-	    child_chromosome[i] = getRandomBinaryDigit(); 
-	
-    } 
-
-    // create new Individual(offspring) using 
-    // generated chromosome for offspring 
-    return Individual<FitnessDataType>(child_chromosome); 
-
-};  
-
-// Overloading < operator 
 template<typename FitnessDataType>
-auto operator<(const Individual<FitnessDataType> &ind1, 
-	       const Individual<FitnessDataType> &ind2) -> bool 
-{ 
-	return ind1.fitness < ind2.fitness; 
-} 
-
-// Driver code 
-auto main()->int { 
-
-    auto generation = 0; 
-
-    std::vector<Individual<int32_t>> population; 
-    bool found = false; 
-
-	// create initial population 
-    for(int32_t i = 0;i < POPULATION_SIZE;i++) { 
-    
-        auto gnome =  create_gnome(); 
-	population.push_back(Individual<int32_t>(gnome)); 
-	
-    } 
-
-    while(!found) { 
-	// sort the population in increasing order of fitness score 
-        std::sort(population.begin(), population.end()); 
-
-	// if the individual having lowest fitness score ie. 
-	// 0 then we know that we have reached to the target 
-	// and break the loop 
-	if(population[0].fitness <= 0) { 
-	    found = true; 
-	    break; 
-	} 
-
-	// Otherwise generate new offsprings for new generation 
-	std::vector<Individual<int32_t>> new_generation; 
-
-	// Perform Elitism, that mean 10% of fittest population 
-	// goes to the next generation 
-	int32_t s = (10U * POPULATION_SIZE) / 100U; 
-	
-	for(auto i = 0;i < s;i++) 
-	    new_generation.push_back(population[i]); 
-
-	// From 50% of fittest population, Individuals 
-	// will mate to produce offspring 
-	s = (90U * POPULATION_SIZE) / 100U; //get other 90% of population
-
-	/* For the remaining 90% of the next generation, crossover from the top 50 parents
- 	 * chosen at random
- 	 */ 
-	
-	for(auto i = 0;i < s;i++) { 
-	
-	    auto r = getRandom(0U, 50U); 
-	    Individual parent1 = population[r]; 
-	    r = getRandom(0U, 50U); 
-	    Individual parent2 = population[r]; 
-	    Individual offspring = parent1.mate(parent2); 
-	    new_generation.push_back(offspring);
-	
-	}
-		
-	population = new_generation; 
-	std::cout<< "Generation: " << generation << "\t"; 
-	std::cout<< "Genome of best individual: "<< population[0].chromosome <<"\t"; 
-	std::cout<< "Fitness score of best individual: "<< population[0].fitness << "\n"; 
-
-	generation++; 
-	
+void operator<<(std::ostream& os, const Individual<FitnessDataType>& ind) {
+   
+    for (auto i:ind.chromosome) {
+        os << i<< " ";
     }
- 
-    std::cout<< "Completed" <<std::endl;
-    std::cout<< "Generation: " << generation << "\t"; 
-    std::cout<< "Solution: "<< population[0].chromosome <<"\t"; 
-    std::cout<< "Fitness: "<< population[0].fitness << "\n"; 
+    
+    os << std::endl;
+}
 
-} 
 
+auto main() -> int {
+
+    auto generation = 0;
+    
+    py::scoped_interpreter guard{};  // Initialize the Python interpreter
+    
+    Individual<float>::individual_size = INDIVIDUAL_SIZE;
+    Individual<float>::fitness_function = call_python_function;
+    std::vector<Individual<float>> population(POPULATION_SIZE);
+    bool found = false;
+
+    // create initial population
+//    #pragma omp parallel for
+    for (auto i=0U; i < POPULATION_SIZE;i++) {
+
+        //py::gil_scoped_acquire acquire;  // Acquire GIL for each thread
+        population[i].setChromosome(create_random_gnome(INDIVIDUAL_SIZE));
+  
+    }
+
+    std::cout<<"Population initialized ..."<<std::endl;
+
+    while (!found) {
+        // sort the population in increasing order of fitness score
+        std::sort(std::execution::par, population.begin(), population.end());
+
+        // if the individual having lowest fitness score ie.
+        // 0 then we know that we have reached to the target
+        // and break the loop
+        if (generation > MAX_ITER) {
+            found = true;
+            break;
+        }
+
+        // Otherwise generate new offsprings for new generation
+        decltype(population) new_generation;
+
+        // Perform Elitism, that mean 10% of fittest population
+        // goes to the next generation
+        constexpr auto percentage = [](const uint32_t number) -> uint32_t{ return (number * POPULATION_SIZE) / 100U;};
+    
+        const auto s = percentage(10U);
+
+        std::cout<<"Next generation spawning..."<<std::endl;
+    
+        std::copy(population.begin(), population.begin() + s, std::back_inserter(new_generation));
+
+        // From the top 50 of the fittest population, Individuals
+        // will mate to produce offspring
+
+        for (auto i = s; i < POPULATION_SIZE; i++) {
+
+            auto r = getRandom(0U, 49U);//get random value between 0 and 50
+            Individual parent1 = population[r];
+            r = getRandom(0U, 49U);
+            Individual parent2 = population[r];
+            Individual offspring = parent1.mate(parent2);
+            new_generation.push_back(offspring);
+        }
+
+        population = new_generation;
+        std::cout << "Generation: " << generation << "\t";
+        //std::cout << "Genome of best individual: " << population[0];
+        std::cout << "Fitness score of best individual: " << population[0].fitness << "\n";
+
+        generation++;
+  
+    }
+
+    std::cout << "Completed" << std::endl;
+    std::cout << "Generation: " << generation << "\t";
+    std::cout << "Solution: " << population[0];
+    std::cout << "Fitness: " << population[0].fitness << "\n";
+}
