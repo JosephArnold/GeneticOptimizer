@@ -19,7 +19,7 @@ auto getRandomBinaryDigit() {
 }
 
 // create chromosome or string of genes
-std::vector<uint32_t> create_random_gnome(const uint32_t& individual_size) {
+std::vector<uint32_t> create_random_gnome(const uint32_t& individual_size=100) {
 
     std::vector<uint32_t> genome(individual_size);
 
@@ -32,5 +32,4 @@ std::vector<uint32_t> create_random_gnome(const uint32_t& individual_size) {
     return genome;
 
 }
-
 
