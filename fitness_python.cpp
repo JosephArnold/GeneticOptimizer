@@ -33,7 +33,7 @@ T call_python_function(const std::vector<uint32_t>& bitset_input) {
     const auto problem_id = 1;
 
     // Call Python function and return result as float
-    py::object result = my_function(bit_array, INDIVIDUAL_SIZE, problem_id);
+    py::object result = my_function(bit_array, bit_array.size(), problem_id);
 
     return result.cast<T>();
 }
