@@ -34,7 +34,7 @@ void operator<<(std::ostream& os, const Individual<FitnessDataType>& ind) {
 auto main(int argc, char* argv[]) -> int {
 
     auto generation = 0;
-    auto POPULATION_SIZE = 1000U;
+    auto POPULATION_SIZE = 500U;
     auto INDIVIDUAL_SIZE = 100U;
 
     SUCCESS_OR_DIE( gaspi_proc_init(GASPI_BLOCK) );
@@ -90,14 +90,14 @@ auto main(int argc, char* argv[]) -> int {
 
     py::scoped_interpreter guard{};  // Initialize the Python interpreter
     
-    Individual<float>::individual_size = INDIVIDUAL_SIZE;
-    Individual<float>::fitness_function = call_python_function;
-    std::vector<Individual<float>> population(POPULATION_SIZE);
+    Individual<float>::individual_size = INDIVIDUAL_SIZE; //set the size of the individual
+    Individual<float>::fitness_function = call_python_function; //assign the fitness function
+    std::vector<Individual<float>> population(LOCAL_POPULATION_SIZE);
     bool found = false;
 
     // create initial population
 //    #pragma omp parallel for
-    for (auto i=0U; i < POPULATION_SIZE;i++) {
+    for (auto i=0U; i < LOCAL_POPULATION_SIZE;i++) {
 
         //py::gil_scoped_acquire acquire;  // Acquire GIL for each thread
         population[i].setChromosome(create_random_gnome(INDIVIDUAL_SIZE));
@@ -106,49 +106,186 @@ auto main(int argc, char* argv[]) -> int {
 
     std::cout<<"Population initialized in rank"<<rank<<std::endl;
 
+    gaspi_segment_id_t const segment_id = 0;
+
+    gaspi_size_t const segment_size = 2 * (sizeof(float) + INDIVIDUAL_SIZE * sizeof (uint32_t));
+
+    /*First half of segment memory will contain local best.
+     * Second half will contain incoming best */ 
+
+    SUCCESS_OR_DIE
+    ( gaspi_segment_create
+      ( segment_id, segment_size
+      , GASPI_GROUP_ALL, GASPI_BLOCK, GASPI_MEM_UNINITIALIZED
+      )
+    );
+
+    gaspi_pointer_t array;
+    
+    SUCCESS_OR_DIE( gaspi_segment_ptr (segment_id, &array) );
+
+    std::cout<<"segment created in "<<rank<<std::endl;
+
+    auto prev_best_score = std::numeric_limits<float>::max();
+
     while (!found) {
         // sort the population in increasing order of fitness score
         std::sort(std::execution::par, population.begin(), population.end());
 
-        // if the individual having lowest fitness score ie.
-        // 0 then we know that we have reached to the target
-        // and break the loop
+        // Have reached the maximum number of iterations?
         if (generation > MAX_ITER) {
             found = true;
             break;
         }
 
+	/*Each process will have its segment id. It will write the genome of the best individual
+	 * to its own segment and the fitness score. For the next generation, it will 
+	 * scan the segments of each process and see the what the fitness score of the 
+	 * best genome of that process. It will take best out of them and add it to the 
+	 * next generation.
+	 * We also write out best genome value but we do not notify.
+	 * We will stick to writing only the best genome and the fitness score.
+	 * Each process will have a segment with id 0.
+	 * Memory buffer - [float fitness value, genome]
+	 */
+
+	const float curr_best_score = population[0].fitness;
+
+	uint32_t* chromosome_sgt;
+
+	const gaspi_notification_t notify_value = 1; // Notification value
+
+	const gaspi_notification_id_t notify_id_base = 0; // Base ID for notifications
+
+	const gaspi_queue_id_t queue_id = 0;
+
+	if(curr_best_score < prev_best_score) {
+
+	    prev_best_score = curr_best_score;
+
+	    float *src_array = static_cast<float*>(array);
+
+	    *src_array = curr_best_score;
+
+	    std::cout<<"New best score of "<<*src_array<<" written to local segment by rank "<<rank<<std::endl;
+
+	    src_array++; //update src_array to point to data after the fitness score
+
+	    std::vector<uint32_t> best_chromosome = population[0].chromosome;
+
+	    chromosome_sgt = reinterpret_cast<uint32_t*>(src_array);
+
+	    /*copy best chromosome to segment */
+	    for(const auto gene:best_chromosome) {
+
+	        *chromosome_sgt = gene;
+		//std::cout<<"<<*src_array<<"written to local segment by rank "<<rank<<std::endl;
+		chromosome_sgt++;
+	    }
+
+	    std::cout<<"Updated information in local segment memory in rank "<<rank<<std::endl;
+
+	    /*Notify all ranks that a new best fitness score has been found in the local population */
+	    for (gaspi_rank_t i = 0; i < num; i++) {
+                if (i != rank) {
+                    gaspi_notify(segment_id, i, notify_id_base + rank, notify_value, queue_id, GASPI_BLOCK);
+                }
+            }
+
+	}
+
+	float best_incoming_fitness = curr_best_score;
+
+        std::vector<uint32_t> best_incoming_genome = population[0].chromosome;;
+
+	/*Now check for notifications from other processes. Has any process updated its best fitness score? */
+        for (gaspi_rank_t i = 0; i < num; i++) {
+        
+	    if (i != rank) {
+            
+	        gaspi_notification_id_t received_id;
+                gaspi_notification_t received_value;
+                gaspi_return_t ret = gaspi_notify_waitsome(segment_id, notify_id_base + i, 1, &received_id, GASPI_TEST);
+            
+		if (ret == GASPI_SUCCESS) {
+                    gaspi_notify_reset(segment_id, received_id, &received_value);
+	
+		    size_t REMOTE_OFF = sizeof(float) + INDIVIDUAL_SIZE * sizeof (uint32_t);
+
+	            /*Check for best scores in others processes local segment */
+            
+	            SUCCESS_OR_DIE
+                    ( gaspi_read(segment_id, REMOTE_OFF, i, 
+			      segment_id, 0, REMOTE_OFF, 
+			      queue_id, GASPI_BLOCK));
+
+		    gaspi_wait(queue_id, GASPI_BLOCK);//wait for read to complete
+              
+		    float *recv_array = static_cast<float*>(array) + (INDIVIDUAL_SIZE + 1);
+
+		    if(best_incoming_fitness >  *recv_array) {
+
+		        best_incoming_fitness = *recv_array;
+
+		        std::cout<<"Better incoming fitness of "<<best_incoming_fitness
+				 <<" received from rank "<<i<<" in rank "<<rank<<std::endl;
+
+		        /*copy chromosome as well */
+
+		        recv_array++; //increase pointer to point to element after fitness value
+
+		        chromosome_sgt = reinterpret_cast<uint32_t*>(recv_array);
+
+		        for(auto& c:best_incoming_genome) {
+
+		            c = *chromosome_sgt;
+			
+			    chromosome_sgt++;
+		        }
+   
+		    }
+	    
+	        }
+
+	    }
+
+	}
+
         // Otherwise generate new offsprings for new generation
         decltype(population) new_generation;
 
-        // Perform Elitism, that mean 10% of fittest population
-        // goes to the next generation
-        auto percentage = [POPULATION_SIZE](const uint32_t number) -> uint32_t{ 
-                                                      return (number * POPULATION_SIZE) / 100U;};
+	/*Let the best indiviual from the incoming genome take over */
+        new_generation.push_back(Individual<float>(best_incoming_genome));
+
+        auto percentage = [LOCAL_POPULATION_SIZE](const uint32_t number) -> uint32_t{ 
+                                                      return (number * LOCAL_POPULATION_SIZE) / 100U;};
     
+	// Perform Elitism, that mean 10% of fittest population
+        // goes to the next generation
+
         const auto s = percentage(10U);
 
-        std::cout<<"Next generation spawning..."<<std::endl;
+        std::cout<<"Next generation spawning in rank "<<rank<<std::endl;
     
         std::copy(population.begin(), population.begin() + s, std::back_inserter(new_generation));
 
         // From the top 50 of the fittest population, Individuals
         // will mate to produce offspring
+	// New generation has s+1 members now
 
-        for (auto i = s; i < POPULATION_SIZE; i++) {
+        for (auto i = s+1; i < LOCAL_POPULATION_SIZE; i++) {
 
-            auto r = getRandom(0U, 49U);//get random value between 0 and 50
+            auto r = getRandom(0, 49);//get random value between 0 and 50
             Individual parent1 = population[r];
-            r = getRandom(0U, 49U);
-            Individual parent2 = population[r];
+            r = getRandom(0U, 5U);
+            Individual parent2 = new_generation[r];
             Individual offspring = parent1.mate(parent2);
             new_generation.push_back(offspring);
         }
 
         population = new_generation;
         std::cout << "Generation: " << generation << "\t";
-        //std::cout << "Genome of best individual: " << population[0];
-        std::cout << "Fitness score of best individual: " << population[0].fitness << "\n";
+        //std::cout << "Fitness score of best individual: " << population[0].fitness << "\n";
 
         generation++;
   
@@ -158,4 +295,6 @@ auto main(int argc, char* argv[]) -> int {
     std::cout << "Generation: " << generation << "\t";
     std::cout << "Solution: " << population[0];
     std::cout << "Fitness: " << population[0].fitness << "\n";
+
+    gaspi_proc_term (GASPI_BLOCK);
 }

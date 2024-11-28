@@ -6,9 +6,6 @@
 #include <random>
 #include <execution>
 
-//#include "Fitness.cpp"
-//#include "Util.cpp"
-
 #include <pybind11/embed.h>
 #include <pybind11/numpy.h>
 #include <bitset>
@@ -24,7 +21,7 @@ T call_python_function(const std::vector<uint32_t>& bitset_input) {
 
     // Add custom path to sys.path
     py::module_ sys = py::module_::import("sys");
-    sys.attr("path").attr("append")("/home/joseph/Amer");
+    sys.attr("path").attr("append")("/p/scratch/sdlrs/joseph/GeneticOptimizer");
 
     // Load Python function
     py::object my_module = py::module_::import("utils");
@@ -41,9 +38,9 @@ T call_python_function(const std::vector<uint32_t>& bitset_input) {
 #if ENABLE_TEST
 auto main() -> int {
 
-    std::bitset<INDIVIDUAL_SIZE> bitset_input;
+    std::vector<uint32_t> bitset_input;
 
-    for(auto i=0; i < INDIVIDUAL_SIZE;i++)
+    for(auto i=0; i < 100;i++)
         bitset_input[i] = i % 2;
 
     float result = call_python_function<float>(bitset_input);

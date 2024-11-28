@@ -23,7 +23,7 @@ std::vector<uint32_t> create_random_gnome(const uint32_t& individual_size=100) {
 
     std::vector<uint32_t> genome(individual_size);
 
-    for (auto i = 0; i < individual_size; i++) {
+    for (auto i = 0U; i < individual_size; i++) {
 
       genome[i] = getRandomBinaryDigit();
   

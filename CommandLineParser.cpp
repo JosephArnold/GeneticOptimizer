@@ -4,7 +4,7 @@
 class InputParser{
     public:
         InputParser (int32_t &argc, char **argv){
-            for (auto i=1U; i < argc; ++i)
+            for (auto i=1; i < argc; ++i)
                 this->tokens.push_back(std::string(argv[i]));
         }
         /// @author iain
