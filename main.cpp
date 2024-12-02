@@ -8,11 +8,10 @@
 #include <GASPI.h>
 #include "success_or_die.h"
 #define MAX_ITER 100
-//#include "Util."
 #include "Individual.cpp"
 #include "fitness_python.cpp"
 #include "CommandLineParser.cpp"
-
+#include <ctime>
 // Overloading < operator
 template <typename FitnessDataType>
 auto operator<(const Individual<FitnessDataType> &ind1,
@@ -39,6 +38,7 @@ auto main(int argc, char* argv[]) -> int {
 
     SUCCESS_OR_DIE( gaspi_proc_init(GASPI_BLOCK) );
 
+    clock_t begin = std::clock();
     gaspi_rank_t rank;
     gaspi_rank_t num;
 
@@ -188,7 +188,8 @@ auto main(int argc, char* argv[]) -> int {
 	    /*Notify all ranks that a new best fitness score has been found in the local population */
 	    for (gaspi_rank_t i = 0; i < num; i++) {
                 if (i != rank) {
-                    gaspi_notify(segment_id, i, notify_id_base + rank, notify_value, queue_id, GASPI_BLOCK);
+                    SUCCESS_OR_DIE(gaspi_notify(segment_id, i, 
+				   notify_id_base + rank, notify_value, queue_id, GASPI_BLOCK));
                 }
             }
 
@@ -208,7 +209,7 @@ auto main(int argc, char* argv[]) -> int {
                 gaspi_return_t ret = gaspi_notify_waitsome(segment_id, notify_id_base + i, 1, &received_id, GASPI_TEST);
             
 		if (ret == GASPI_SUCCESS) {
-                    gaspi_notify_reset(segment_id, received_id, &received_value);
+                    SUCCESS_OR_DIE(gaspi_notify_reset(segment_id, received_id, &received_value));
 	
 		    size_t REMOTE_OFF = sizeof(float) + INDIVIDUAL_SIZE * sizeof (uint32_t);
 
@@ -219,7 +220,7 @@ auto main(int argc, char* argv[]) -> int {
 			      segment_id, 0, REMOTE_OFF, 
 			      queue_id, GASPI_BLOCK));
 
-		    gaspi_wait(queue_id, GASPI_BLOCK);//wait for read to complete
+		    SUCCESS_OR_DIE(gaspi_wait(queue_id, GASPI_BLOCK));//wait for read to complete
               
 		    float *recv_array = static_cast<float*>(array) + (INDIVIDUAL_SIZE + 1);
 
@@ -296,5 +297,19 @@ auto main(int argc, char* argv[]) -> int {
     std::cout << "Solution: " << population[0];
     std::cout << "Fitness: " << population[0].fitness << "\n";
 
-    gaspi_proc_term (GASPI_BLOCK);
+    clock_t end = std::clock();
+    double elapsed_time = double(end - begin) / CLOCKS_PER_SEC;
+    double max_elapsed_time = elapsed_time; // Initialize with local time
+
+    SUCCESS_OR_DIE(gaspi_allreduce(&elapsed_time, &max_elapsed_time, 1, GASPI_OP_MAX, GASPI_TYPE_DOUBLE, GASPI_GROUP_ALL,                   GASPI_BLOCK));
+
+    std::cout<<"Maximum elapsed time among all processes: "<<max_elapsed_time<<std::endl;;
+    // Print results on rank 0
+    if (rank == 0) {
+        std::cout<<"Maximum elapsed time among all processes: "<<max_elapsed_time<<std::endl;;
+    }
+
+    SUCCESS_OR_DIE(gaspi_proc_term (GASPI_BLOCK));
+
+
 }

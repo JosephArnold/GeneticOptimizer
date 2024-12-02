@@ -60,3 +60,7 @@ add_executable(runMe main.cpp)
 # Link libraries
 target_compile_options(runMe PRIVATE ${PYTHON_CFLAGS_LIST})
 target_link_libraries(runMe PRIVATE GPI2 Python3::Python ${PYTHON_LDFLAGS_LIST})
+
+#set(CMAKE_CXX_FLAGS "-std=c++20 -Wall -Wno-dev -W -Ofast -lm")
+#add_executable(runMe main.cpp)
+#target_compile_options(runMe PRIVATE -Wall -Wextra -Wpedantic)
